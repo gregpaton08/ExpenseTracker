@@ -16,25 +16,22 @@ import Foundation // For DateFormatter and UUID
 struct Expense: Identifiable, Codable {
     let id: UUID
     var amount: Double
-    var location: String // Tag for where the purchase was made
-    var item: String     // Tag for what the purchase was
+    var tags: [String]   // Now an array of arbitrary tags
     var date: Date       // Date of the purchase
 
     // Initializes a new Expense instance.
-    init(amount: Double, location: String, item: String, date: Date = Date()) {
+    init(amount: Double, tags: [String], date: Date = Date()) {
         self.id = UUID() // Generate a unique ID for each expense.
         self.amount = amount
-        self.location = location
-        self.item = item
+        self.tags = tags
         self.date = date
     }
 
     // Custom initializer for decoding from CSV (where ID is already known).
-    init(id: UUID, amount: Double, location: String, item: String, date: Date) {
+    init(id: UUID, amount: Double, tags: [String], date: Date) {
         self.id = id
         self.amount = amount
-        self.location = location
-        self.item = item
+        self.tags = tags
         self.date = date
     }
 }
@@ -43,7 +40,7 @@ struct Expense: Identifiable, Codable {
 
 extension Array where Element == Expense {
     // Helper function to escape strings for CSV (enclose in quotes if contains comma or quote).
-    // Moved outside the `toCSVString` method to simplify its context.
+    // This is crucial for handling tags, which might contain commas themselves.
     static func escapeCSVString(_ string: String) -> String {
         let escapedString = string.replacingOccurrences(of: "\"", with: "\"\"") // Escape internal quotes
         if escapedString.contains(",") || escapedString.contains("\n") || escapedString.contains("\"") {
@@ -54,21 +51,27 @@ extension Array where Element == Expense {
 
     // Converts an array of Expense objects into a CSV formatted string.
     // Each row represents an expense, with fields separated by commas.
-    // Handles commas within string fields by enclosing them in double quotes.
+    // Tags are joined by a special delimiter (";;") and then escaped for the CSV field.
     func toCSVString() -> String {
         // Define the header row for the CSV file.
-        let header = "ID,Amount,Location,Item,Date\n"
+        // Updated header to reflect the 'Tags' column.
+        let header = "ID,Amount,Tags,Date\n"
         
         // Use a DateFormatter to ensure consistent date formatting in CSV.
         let dateFormatter = ISO8601DateFormatter() // ISO 8601 for consistent date/time.
 
         // Map each expense to a CSV line.
         let rows = self.map { (expense: Expense) in
+            // Join tags into a single string using a specific delimiter, then escape it.
+            // Using a delimiter like ";;" makes it less likely to conflict with tag content.
+            let tagsString = expense.tags.map { Self.escapeCSVString($0) }.joined(separator: ";;")
+            let escapedTags = Self.escapeCSVString(tagsString)
+
             // Format the date to a string.
             let dateString = dateFormatter.string(from: expense.date)
 
-            // Combine all fields into a CSV line, using the static helper for escaping.
-            return "\(expense.id.uuidString),\(expense.amount),\(Self.escapeCSVString(expense.location)),\(Self.escapeCSVString(expense.item)),\(dateString)"
+            // Combine all fields into a CSV line.
+            return "\(expense.id.uuidString),\(expense.amount),\(escapedTags),\(dateString)"
         }
         
         // Join the header and all expense rows to form the complete CSV string.
@@ -91,28 +94,28 @@ extension Array where Element == Expense {
         for line in lines.dropFirst() {
             guard !line.isEmpty else { continue } // Skip empty lines.
             
-            // Basic splitting by comma. This is a simplified parser and might
-            // not handle complex CSV cases with quoted commas perfectly without a proper CSV parser library.
-            // For a robust solution, consider a dedicated CSV parsing library.
+            // This is a simplified CSV parser. For robust handling of quoted fields
+            // that might contain commas or the delimiter ";;", a proper CSV parsing library
+            // would be ideal. This basic split assumes simple comma separation for main fields.
             let components = line.components(separatedBy: ",")
             
-            // We expect 5 components: ID, Amount, Location, Item, Date.
-            guard components.count >= 5 else {
-                print("Skipping malformed CSV line: \(line)")
+            // We now expect 4 components: ID, Amount, Tags, Date.
+            guard components.count >= 4 else {
+                print("Skipping malformed CSV line (incorrect component count): \(line)")
                 continue
             }
 
             // Attempt to parse each component into the correct type.
             if let id = UUID(uuidString: components[0]),
                let amount = Double(components[1]),
-               let date = dateFormatter.date(from: components[4]) { // Date is the 5th component (index 4).
+               let date = dateFormatter.date(from: components[3]) { // Date is the 4th component (index 3).
                 
-                // Location and Item tags might be quoted; remove quotes if present.
-                let location = components[2].replacingOccurrences(of: "\"", with: "")
-                let item = components[3].replacingOccurrences(of: "\"", with: "")
+                // Extract and unescape tags string, then split by delimiter.
+                let tagsRawString = components[2].replacingOccurrences(of: "\"", with: "") // Remove CSV-level quotes
+                let tags = tagsRawString.components(separatedBy: ";;").filter { !$0.isEmpty } // Split by internal delimiter and filter empty tags
 
                 // Create a new Expense object and add it to the array.
-                let expense = Expense(id: id, amount: amount, location: location, item: item, date: date)
+                let expense = Expense(id: id, amount: amount, tags: tags, date: date)
                 expenses.append(expense)
             } else {
                 print("Failed to parse expense from line: \(line)")
@@ -187,8 +190,8 @@ class LocalFilePersistenceManager: ExpensePersistence {
 struct ContentView: View {
     // State variables to hold user input for new expenses.
     @State private var amount: String = ""
-    @State private var locationTag: String = ""
-    @State private var itemTag: String = ""
+    @State private var newTag: String = "" // For adding new tags
+    @State private var currentTags: [String] = [] // Tags for the current expense being added
     
     // State variable to store all recorded expenses.
     @State private var expenses: [Expense] = []
@@ -214,17 +217,44 @@ struct ContentView: View {
                         .background(Color(.systemGray6))
                         .cornerRadius(8)
                     
-                    // TextField for the location tag.
-                    TextField("Where was this purchase?", text: $locationTag)
-                        .padding()
-                        .background(Color(.systemGray6))
+                    // Input for new tags
+                    HStack {
+                        TextField("Add a tag (e.g., Groceries, Dinner)", text: $newTag)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                        
+                        Button("Add") {
+                            addTag()
+                        }
+                        .font(.headline)
+                        .padding(.horizontal, 15)
+                        .padding(.vertical, 10)
+                        .background(Color.green)
+                        .foregroundColor(.white)
                         .cornerRadius(8)
+                    }
                     
-                    // TextField for the item tag.
-                    TextField("What was the purchase?", text: $itemTag)
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(8)
+                    // Display current tags as oval bubbles
+                    if !currentTags.isEmpty {
+                        // Using a FlexibleLayout or just a simple HStack with wrapping
+                        // For simplicity, using a horizontal ScrollView for many tags in a row.
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack {
+                                ForEach(currentTags, id: \.self) { tag in
+                                    TagBubble(tag: tag) {
+                                        removeTag(tag)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 5)
+                        }
+                    } else {
+                        Text("No tags added yet.")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .padding(.vertical, 5)
+                    }
                     
                     // Button to add the new expense.
                     Button("Add Expense") {
@@ -236,28 +266,43 @@ struct ContentView: View {
                     .background(Color.blue)
                     .foregroundColor(.white)
                     .cornerRadius(10)
+                    .disabled(amount.isEmpty || currentTags.isEmpty) // Disable if amount is empty or no tags
                 }
                 
-                // MARK: - Expense List Section
+                // MARK: - Recorded Expenses List Section
                 Section("Recorded Expenses") {
                     // Display the list of expenses.
-                    // ForEach is used for dynamic lists that can be deleted.
                     ForEach(expenses.sorted(by: { $0.date > $1.date })) { expense in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(expense.item)
-                                    .font(.headline)
-                                Text(expense.location)
-                                    .font(.subheadline)
-                                    .foregroundColor(.gray)
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(String(format: "$%.2f", expense.amount))
+                                    .font(.title3)
+                                    .fontWeight(.bold)
+                                Spacer()
                                 Text(expense.date, style: .date) // Display date
                                     .font(.caption)
                                     .foregroundColor(.secondary)
                             }
-                            Spacer()
-                            Text(String(format: "$%.2f", expense.amount)) // Format amount to 2 decimal places.
-                                .font(.title3)
-                                .fontWeight(.bold)
+                            
+                            // Display tags for each recorded expense
+                            if !expense.tags.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack {
+                                        ForEach(expense.tags, id: \.self) { tag in
+                                            Text(tag)
+                                                .font(.caption2)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.gray.opacity(0.2))
+                                                .cornerRadius(10)
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("No tags")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
                         }
                         .padding(.vertical, 4)
                     }
@@ -288,7 +333,29 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Helper Functions
+    // MARK: - Tag Management Functions
+
+    // Adds a new tag to the `currentTags` list.
+    private func addTag() {
+        let trimmedTag = newTag.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTag.isEmpty && !currentTags.contains(trimmedTag) {
+            currentTags.append(trimmedTag)
+            newTag = "" // Clear the input field after adding.
+        } else if trimmedTag.isEmpty {
+            alertMessage = "Please enter a tag."
+            showingAlert = true
+        } else {
+            alertMessage = "This tag already exists."
+            showingAlert = true
+        }
+    }
+
+    // Removes a tag from the `currentTags` list.
+    private func removeTag(_ tagToRemove: String) {
+        currentTags.removeAll(where: { $0 == tagToRemove })
+    }
+
+    // MARK: - Expense Management Functions
 
     // Validates input and adds a new expense to the list.
     private func addExpense() {
@@ -299,28 +366,23 @@ struct ContentView: View {
             return
         }
         
-        // Validate tags are not empty.
-        guard !locationTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            alertMessage = "Please enter a location tag."
-            showingAlert = true
-            return
-        }
-        guard !itemTag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            alertMessage = "Please enter an item tag."
-            showingAlert = true
-            return
-        }
+//        // Validate that at least one tag is present.
+//        guard !currentTags.isEmpty else {
+//            alertMessage = "Please add at least one tag for the purchase."
+//            showingAlert = true
+//            return
+//        }
 
-        // Create a new Expense object.
-        let newExpense = Expense(amount: amountValue, location: locationTag.trimmingCharacters(in: .whitespacesAndNewlines), item: itemTag.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Create a new Expense object with the current tags.
+        let newExpense = Expense(amount: amountValue, tags: currentTags)
         
         // Add the new expense to the beginning of the array.
         expenses.insert(newExpense, at: 0)
         
-        // Clear the input fields.
+        // Clear the input fields and current tags after adding.
         amount = ""
-        locationTag = ""
-        itemTag = ""
+        newTag = ""
+        currentTags = []
         
         // Save the updated list using the persistence manager.
         saveExpenses()
@@ -343,6 +405,37 @@ struct ContentView: View {
     // Calls the persistence manager to load expenses.
     private func loadExpenses() {
         expenses = persistenceManager.loadExpenses()
+    }
+}
+
+// MARK: - TagBubble View
+
+// A reusable SwiftUI view for displaying individual tags as oval bubbles with a delete button.
+struct TagBubble: View {
+    let tag: String
+    var onDelete: () -> Void // Closure to call when the delete button is tapped
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(tag)
+                .font(.caption)
+                .padding(.leading, 8)
+                .lineLimit(1) // Ensure tag doesn't wrap
+            
+            Button {
+                onDelete()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(PlainButtonStyle()) // To remove default button styling
+            .padding(.trailing, 6)
+        }
+        .padding(.vertical, 5)
+        .background(Color.blue.opacity(0.7))
+        .foregroundColor(.white)
+        .cornerRadius(20) // Makes it an oval/capsule shape
     }
 }
 
