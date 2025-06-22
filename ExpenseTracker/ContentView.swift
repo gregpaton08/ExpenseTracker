@@ -192,6 +192,7 @@ struct ContentView: View {
     @State private var amount: String = ""
     @State private var newTag: String = "" // For adding new tags
     @State private var currentTags: [String] = [] // Tags for the current expense being added
+    @State private var selectedDate: Date = Date() // State for the selected date, initialized to current date
     
     // State variable to store all recorded expenses.
     @State private var expenses: [Expense] = []
@@ -210,12 +211,25 @@ struct ContentView: View {
             Form {
                 // MARK: - Expense Input Section
                 Section("New Expense Details") {
-                    // TextField for the amount. Uses .keyboardType(.decimalPad) for numerical input.
-                    TextField("Amount", text: $amount)
-                        .keyboardType(.decimalPad)
-                        .padding()
-                        .background(Color(.systemGray6))
+                    HStack {
+                        // TextField for the amount. Uses .keyboardType(.decimalPad) for numerical input.
+                        TextField("Amount", text: $amount)
+                            .keyboardType(.decimalPad)
+                            .padding()
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                        
+                        // Date Picker, now only showing date component and no label
+                        DatePicker(
+                            "", // Empty label
+                            selection: $selectedDate,
+                            displayedComponents: [.date] // Only show date
+                        )
+                        .padding(.vertical, 8) // Reduced vertical padding to align better
+//                        .background(Color(.systemGray6))
                         .cornerRadius(8)
+                        .labelsHidden() // Explicitly hide the label
+                    }
                     
                     // Input for new tags
                     HStack {
@@ -223,6 +237,9 @@ struct ContentView: View {
                             .padding()
                             .background(Color(.systemGray6))
                             .cornerRadius(8)
+                            .onSubmit { // Add tag when return key is pressed
+                                addTag()
+                            }
                         
                         Button("Add") {
                             addTag()
@@ -279,9 +296,17 @@ struct ContentView: View {
                                     .font(.title3)
                                     .fontWeight(.bold)
                                 Spacer()
-                                Text(expense.date, style: .date) // Display date
+                                // Display both date and time (if time is not midnight) or just date
+                                // Note: DateFormatter implicitly handles time if it's not midnight.
+                                Text(expense.date, style: .date)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                // Display time only if it's not midnight, otherwise keep it blank or display only date
+                                if !Calendar.current.isDateInToday(expense.date) || Calendar.current.component(.hour, from: expense.date) != 0 || Calendar.current.component(.minute, from: expense.date) != 0 {
+                                    Text(expense.date, style: .time)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                             
                             // Display tags for each recorded expense
@@ -373,16 +398,17 @@ struct ContentView: View {
 //            return
 //        }
 
-        // Create a new Expense object with the current tags.
-        let newExpense = Expense(amount: amountValue, tags: currentTags)
+        // Create a new Expense object with the current tags and selected date.
+        let newExpense = Expense(amount: amountValue, tags: currentTags, date: selectedDate)
         
         // Add the new expense to the beginning of the array.
         expenses.insert(newExpense, at: 0)
         
-        // Clear the input fields and current tags after adding.
+        // Clear the input fields and current tags after adding. Reset date to current.
         amount = ""
         newTag = ""
         currentTags = []
+        selectedDate = Date() // Reset date to current time for next entry
         
         // Save the updated list using the persistence manager.
         saveExpenses()
