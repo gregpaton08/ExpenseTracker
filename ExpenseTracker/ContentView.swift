@@ -338,11 +338,11 @@ struct ContentView: View {
             .navigationTitle("My Spending Tracker")
             // Add a toolbar item to save data manually.
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save Data") {
-                        saveExpenses() // Now calls the persistence manager
-                    }
-                }
+//                ToolbarItem(placement: .navigationBarTrailing) {
+//                    Button("Save Data") {
+//                        saveExpenses() // Now calls the persistence manager
+//                    }
+//                }
                 ToolbarItem(placement: .navigationBarLeading) {
                     EditButton() // Provides built-in editing functionality (e.g., delete)
                 }
