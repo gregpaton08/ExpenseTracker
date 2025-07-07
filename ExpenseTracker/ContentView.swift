@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Foundation // For DateFormatter and UUID
+import UIKit // Required for UIActivityViewController
 
 // MARK: - Expense Model
 
@@ -132,6 +133,8 @@ extension Array where Element == Expense {
 protocol ExpensePersistence {
     func saveExpenses(_ expenses: [Expense])
     func loadExpenses() -> [Expense]
+    // Added a method to get the file URL for export purposes.
+    func getFileURL() -> URL?
 }
 
 // MARK: - Local File Persistence Manager
@@ -183,6 +186,16 @@ class LocalFilePersistenceManager: ExpensePersistence {
             return []
         }
     }
+    
+    // Returns the URL of the saved CSV file.
+    func getFileURL() -> URL? {
+        // Ensure the file exists before returning the URL.
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            print("File does not exist at \(fileURL.path)")
+            return nil
+        }
+        return fileURL
+    }
 }
 
 // MARK: - Main SwiftUI View
@@ -226,7 +239,7 @@ struct ContentView: View {
                             displayedComponents: [.date] // Only show date
                         )
                         .padding(.vertical, 8) // Reduced vertical padding to align better
-//                        .background(Color(.systemGray6))
+                        .background(Color(.systemGray6))
                         .cornerRadius(8)
                         .labelsHidden() // Explicitly hide the label
                     }
@@ -338,11 +351,16 @@ struct ContentView: View {
             .navigationTitle("My Spending Tracker")
             // Add a toolbar item to save data manually.
             .toolbar {
-//                ToolbarItem(placement: .navigationBarTrailing) {
-//                    Button("Save Data") {
-//                        saveExpenses() // Now calls the persistence manager
-//                    }
-//                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        Button("Save Data") {
+                            saveExpenses()
+                        }
+                        Button("Export Data") {
+                            exportExpenses()
+                        }
+                    }
+                }
                 ToolbarItem(placement: .navigationBarLeading) {
                     EditButton() // Provides built-in editing functionality (e.g., delete)
                 }
@@ -431,6 +449,45 @@ struct ContentView: View {
     // Calls the persistence manager to load expenses.
     private func loadExpenses() {
         expenses = persistenceManager.loadExpenses()
+    }
+    
+    // MARK: - Export Functionality
+    
+    private func exportExpenses() {
+        // Ensure data is saved before attempting to export
+        saveExpenses()
+        
+        // Get the file URL from the persistence manager
+        guard let fileURL = persistenceManager.getFileURL() else {
+            alertMessage = "Error: Could not find the file to export."
+            showingAlert = true
+            return
+        }
+        
+        // Create a UIActivityViewController to present the share sheet
+        let activityViewController = UIActivityViewController(activityItems: [fileURL], applicationActivities: nil)
+        
+        // Exclude some activity types if desired (optional)
+        // activityViewController.excludedActivityTypes = [.postToWeibo, .postToTencentWeibo]
+        
+        // Present the share sheet from the current view controller
+        // This is necessary because UIActivityViewController is a UIKit component
+        // and needs a presenting view controller.
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let window = scene.windows.first,
+           let rootViewController = window.rootViewController {
+            
+            // Find the topmost presented view controller to present from
+            var topViewController = rootViewController
+            while let presentedVC = topViewController.presentedViewController {
+                topViewController = presentedVC
+            }
+            
+            topViewController.present(activityViewController, animated: true, completion: nil)
+        } else {
+            alertMessage = "Could not present export options."
+            showingAlert = true
+        }
     }
 }
 
